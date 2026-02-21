@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
+	"os"
 	"time"
-
-	"database/sql"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/redis/go-redis/v9"
@@ -16,8 +16,18 @@ import (
 	"url-shortener/internal/store"
 )
 
+func getenv(key, fallback string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
 func main() {
-	dsn := "root:password@tcp(127.0.0.1:3306)/shortener?parseTime=true"
+	dsn := getenv("MYSQL_DSN", "root:password@tcp(127.0.0.1:3306)/shortener?parseTime=true")
+	redisAddr := getenv("REDIS_ADDR", "127.0.0.1:6379")
+
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatal(err)
@@ -31,7 +41,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
@@ -46,8 +56,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.Health)
 	mux.HandleFunc("/shorten", s.Shorten)
-	mux.HandleFunc("/", s.Resolve)
 	mux.HandleFunc("/lookup", s.Lookup)
+	mux.HandleFunc("/", s.Resolve)
 
 	log.Println("listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
