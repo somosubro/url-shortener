@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"url-shortener/internal/cache"
 	"url-shortener/internal/codegen"
@@ -27,6 +28,17 @@ type ShortenRequest struct {
 type ShortenResponse struct {
 	Code     string `json:"code"`
 	ShortURL string `json:"short_url"`
+}
+
+type LookupItem struct {
+	Code      string    `json:"code"`
+	ShortURL  string    `json:"short_url"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type LookupResponse struct {
+	URL   string       `json:"url"`
+	Items []LookupItem `json:"items"`
 }
 
 const (
@@ -93,7 +105,9 @@ func (s *Server) Shorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.cache.Set(code, req.URL)
+	if s.cache != nil {
+		s.cache.Set(code, req.URL)
+	}
 
 	resp := ShortenResponse{
 		Code:     code,
@@ -107,19 +121,21 @@ func (s *Server) Shorten(w http.ResponseWriter, r *http.Request) {
 // Resolve handles GET /{code} and redirects to the long URL.
 func (s *Server) Resolve(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Path[1:]
-	if code == "" || code == "health" || code == "shorten" {
+	if code == "" || code == "health" || code == "shorten" || code == "lookup" {
 		http.NotFound(w, r)
 		return
 	}
 
 	log.Println("resolve:", code)
 
-	if longURL, ok := s.cache.Get(code); ok {
-		log.Println("cache HIT:", code)
-		http.Redirect(w, r, longURL, http.StatusFound)
-		return
+	if s.cache != nil {
+		if longURL, ok := s.cache.Get(code); ok {
+			log.Println("cache HIT:", code)
+			http.Redirect(w, r, longURL, http.StatusFound)
+			return
+		}
+		log.Println("cache MISS:", code)
 	}
-	log.Println("cache MISS:", code)
 
 	longURL, err := s.store.GetURL(code)
 	if err == sql.ErrNoRows {
@@ -131,7 +147,45 @@ func (s *Server) Resolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.cache.Set(code, longURL)
-	log.Println("cache SET:", code)
+	if s.cache != nil {
+		s.cache.Set(code, longURL)
+		log.Println("cache SET:", code)
+	}
 	http.Redirect(w, r, longURL, http.StatusFound)
+}
+
+// Lookup handles GET /lookup?url=...
+// Returns the most recent short codes created for that long URL.
+func (s *Server) Lookup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	longURL := r.URL.Query().Get("url")
+	if longURL == "" {
+		http.Error(w, "url query param is required", http.StatusBadRequest)
+		return
+	}
+
+	results, err := s.store.LookupCodes(longURL, 10)
+	if err != nil {
+		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]LookupItem, 0, len(results))
+	for _, r := range results {
+		items = append(items, LookupItem{
+			Code:      r.Code,
+			ShortURL:  "http://localhost:8080/" + r.Code,
+			CreatedAt: r.CreatedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(LookupResponse{
+		URL:   longURL,
+		Items: items,
+	})
 }

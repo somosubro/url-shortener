@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"database/sql"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/redis/go-redis/v9"
 
@@ -46,6 +47,7 @@ func main() {
 	mux.HandleFunc("/health", s.Health)
 	mux.HandleFunc("/shorten", s.Shorten)
 	mux.HandleFunc("/", s.Resolve)
+	mux.HandleFunc("/lookup", s.Lookup)
 
 	log.Println("listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
